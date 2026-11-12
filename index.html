@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow, noarchive, nosnippet">
+<title>Nambi</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,opsz,wght@1,6..96,700&family=Figtree:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root { --ink:#f6eee6; --muted:#bfaea3; --bg:#170d10; --panel:#23151a; --line:#3d2830; --accent:#e8a94a; --rose:#d97b8f; color-scheme: dark; }
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; }
+body { background: var(--bg); color: var(--ink); font: 17px/1.55 "Figtree", system-ui, sans-serif; display: grid; place-items: center; min-height: 100vh; padding: 24px 16px; }
+main { width: 100%; max-width: 420px; text-align: center; }
+h1 { font: italic 700 clamp(48px, 12vw, 72px)/1 "Bodoni Moda", Georgia, serif; margin: 0 0 10px; }
+.sub { color: var(--muted); margin: 0 0 36px; }
+form { display: grid; gap: 12px; }
+label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+input { font: 16px inherit; font-family: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 13px 20px; width: 100%; }
+button { font: 600 16px "Figtree", system-ui, sans-serif; border-radius: 999px; padding: 13px 22px; cursor: pointer; border: 1px solid var(--accent); background: var(--accent); color: #1b0f08; }
+button.ghost { background: transparent; color: var(--muted); border-color: var(--line); margin-top: 20px; }
+button:disabled { opacity: .5; cursor: wait; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.msg { min-height: 1.5em; margin: 16px 0 0; color: var(--muted); font-size: 15px; }
+.msg.err { color: var(--rose); }
+.big { font: italic 700 26px/1.3 "Bodoni Moda", Georgia, serif; color: var(--accent); margin: 0; }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Nambi</h1>
+  <p class="sub">The image library by and for Black women</p>
+
+  <section id="v-signin" hidden>
+    <form id="form">
+      <label for="email">Email address</label>
+      <input id="email" type="email" autocomplete="email" required placeholder="you@example.com">
+      <button id="send" type="submit">Send me a sign-in link</button>
+    </form>
+  </section>
+
+  <section id="v-wait" hidden>
+    <p class="big">Thank you, you're on the Nambi waitlist.</p>
+    <button class="ghost" id="signout" type="button">Sign out</button>
+  </section>
+
+  <p class="msg" id="msg" role="status" aria-live="polite"></p>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"
+        integrity="sha384-GFr3yTh5lJznCbZfpTtXnwboFsxqtTQoeTZCRHhE0579KrRmlCzen5AA8ohaB5ug"
+        crossorigin="anonymous"></script>
+<script>
+(function () {
+  // Public (publishable/anon) key only. Access is enforced server-side by RLS.
+  var SUPABASE_URL = "https://ifhkzdcofnetmuncaqtl.supabase.co";
+  var SUPABASE_KEY = "sb_publishable_FBb70laky2ThV1RoipdBGg_UmPyqLaB";
+  var BUCKET = "nambi-private", OBJECT = "site.html";
+
+  var sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+    auth: { flowType: "implicit", detectSessionInUrl: true, persistSession: true }
+  });
+
+  var $ = function (id) { return document.getElementById(id); };
+  function show(view) { $("v-signin").hidden = view !== "signin"; $("v-wait").hidden = view !== "wait"; }
+  function say(t, isErr) { $("msg").textContent = t || ""; $("msg").className = "msg" + (isErr ? " err" : ""); }
+
+  // Errors from an expired/used magic link arrive in the URL hash.
+  var hash = new URLSearchParams(location.hash.slice(1));
+  var linkError = hash.get("error_description");
+  if (location.hash) history.replaceState(null, "", location.pathname);
+
+  async function signOut() { await sb.auth.signOut(); location.replace(location.pathname); }
+
+  async function enter(session) {
+    say("Opening Nambi…");
+    var res = await sb.storage.from(BUCKET).download(OBJECT);
+    if (res.data) {
+      var html = await res.data.text();
+      // Replace this whole document with the protected page. Unlike innerHTML,
+      // document.write executes the page's inline <script>s, keeps <head> styles,
+      // and leaves the URL as nambi.org (so #anchors and "copy link" still work).
+      document.open();
+      document.write(html);
+      document.close();
+      var so = document.getElementById("nambi-signout");
+      if (so) so.addEventListener("click", function (e) { e.preventDefault(); signOut(); });
+      return;
+    }
+    // Not approved (RLS hides the object) -> join waitlist. Duplicate = already on it.
+    var ins = await sb.from("waitlist").insert({ email: session.user.email });
+    if (ins.error && ins.error.code !== "23505") { say("Something went wrong. Please try again later.", true); }
+    else say("");
+    show("wait");
+  }
+
+  $("form").addEventListener("submit", async function (e) {
+    e.preventDefault();
+    var email = $("email").value.trim();
+    if (!email) return;
+    $("send").disabled = true; say("Sending…");
+    var r = await sb.auth.signInWithOtp({ email: email, options: { emailRedirectTo: location.origin + "/" } });
+    $("send").disabled = false;
+    if (r.error) say(r.error.status === 429 ? "Too many requests right now. Please try again in a little while." : "We couldn't send a link. Please check the address and try again.", true);
+    else say("Check your email for a sign-in link.");
+  });
+  $("signout").addEventListener("click", signOut);
+
+  sb.auth.getSession().then(function (r) {
+    var session = r.data && r.data.session;
+    if (session) enter(session);
+    else { show("signin"); if (linkError) say("That sign-in link has expired or was already used. Request a new one.", true); }
+  });
+})();
+</script>
+</body>
+</html>
